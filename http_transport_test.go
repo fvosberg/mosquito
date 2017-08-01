@@ -92,6 +92,57 @@ func TestHTTPListHandler(t *testing.T) {
 			},
 			expectedResponseBody: `{"msg":"Internal Server Error"}`,
 		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			listerMock := &listerMock{
+				ListFunc: func() ([]Todo, error) {
+					return tt.listerReturn, tt.listerError
+				},
+			}
+			h := &httpListHandler{
+				lister: listerMock,
+			}
+			res := httptest.NewRecorder()
+			h.ServeHTTP(res, tt.req)
+
+			if res.Code != tt.expectedStatusCode {
+				t.Errorf("Expected status code %d, but got %d", tt.expectedStatusCode, res.Code)
+			}
+			if !cmp.Equal(res.HeaderMap, tt.expectedResponseHeader) {
+				t.Fatalf("Unexpected header\nexpected: %#v\nactual:   %#v",
+					tt.expectedResponseHeader,
+					res.HeaderMap,
+				)
+			}
+			if strings.Trim(res.Body.String(), "\n") != tt.expectedResponseBody {
+				t.Errorf("Unexpected response body\nexpected: %s\nactual:   %s",
+					tt.expectedResponseBody, res.Body.String())
+			}
+		})
+	}
+}
+
+func TestAuthenticated(t *testing.T) {
+	tests := map[string]struct {
+		req                    *http.Request
+		expectedStatusCode     int
+		expectedResponseHeader http.Header
+		expectedResponseBody   string
+	}{
+		"happy": {
+			req: func() *http.Request {
+				r := httptest.NewRequest("GET", "/", nil)
+				r.Header.Set("Authentication", "Bearer JWT")
+				return r
+			}(),
+			expectedStatusCode: 413,
+			expectedResponseHeader: http.Header{
+				"Content-Type": []string{"application/json; charset=UTF-8"},
+			},
+			expectedResponseBody: `"called inner handler"`,
+		},
 		"missing authentication header": {
 			req:                httptest.NewRequest("GET", "/", nil),
 			expectedStatusCode: 400,
@@ -116,16 +167,13 @@ func TestHTTPListHandler(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			listerMock := &listerMock{
-				ListFunc: func() ([]Todo, error) {
-					return tt.listerReturn, tt.listerError
-				},
-			}
-			h := &httpListHandler{
-				lister: listerMock,
-			}
+			h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(413)
+				w.Write([]byte(`"called inner handler"`))
+			})
+
 			res := httptest.NewRecorder()
-			h.ServeHTTP(res, tt.req)
+			authenticated(h).ServeHTTP(res, tt.req)
 
 			if res.Code != tt.expectedStatusCode {
 				t.Errorf("Expected status code %d, but got %d", tt.expectedStatusCode, res.Code)

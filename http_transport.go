@@ -13,7 +13,7 @@ import (
 // we are returning the interface, not the concrete type, to decouple our implementation from the API
 func NewServer() http.Handler {
 	return &server{
-		listHandler: &httpListHandler{},
+		listHandler: authenticated(&httpListHandler{}),
 	}
 }
 
@@ -50,17 +50,6 @@ type httpListHandler struct {
 
 func (h *httpListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	authHeader := r.Header.Get("Authentication")
-	if authHeader == "" {
-		w.WriteHeader(400)
-		fmt.Fprintf(w, `{"msg":"Missing \"Authentication\" header of format \"Bearer [JWT]\""}`)
-		return
-	}
-	if !strings.HasPrefix(authHeader, "Bearer ") {
-		w.WriteHeader(400)
-		fmt.Fprintf(w, `{"msg":"Wrongly formatted \"Authentication\" header. It must be of the format \"Bearer [JWT]\""}`)
-		return
-	}
 	todos, err := h.lister.List()
 	if err != nil {
 		w.WriteHeader(500)
@@ -75,4 +64,26 @@ func (h *httpListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 type lister interface {
 	List() ([]Todo, error)
+}
+
+func authenticated(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+		authHeader := r.Header.Get("Authentication")
+		if authHeader == "" {
+			w.WriteHeader(400)
+			fmt.Fprintf(w, `{"msg":"Missing \"Authentication\" header of format \"Bearer [JWT]\""}`)
+			return
+		}
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+			w.WriteHeader(400)
+			fmt.Fprintf(w, `{"msg":"Wrongly formatted \"Authentication\" header. It must be of the format \"Bearer [JWT]\""}`)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+type authenticatedHandler interface {
+	ServeHTTP(int, http.ResponseWriter, *http.Request)
 }
