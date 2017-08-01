@@ -49,6 +49,11 @@ type httpListHandler struct {
 
 func (h *httpListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	if r.Header.Get("Authentication") == "" {
+		w.WriteHeader(400)
+		fmt.Fprintf(w, `{"msg":"Missing \"Authentication\" header of format \"Bearer [JWT]\""}`)
+		return
+	}
 	todos, err := h.lister.List()
 	if err != nil {
 		w.WriteHeader(500)

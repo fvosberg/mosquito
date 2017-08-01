@@ -60,7 +60,11 @@ func TestHTTPListHandler(t *testing.T) {
 		expectedResponseBody   string
 	}{
 		"happy": {
-			req: httptest.NewRequest("GET", "/", nil),
+			req: func() *http.Request {
+				r := httptest.NewRequest("GET", "/", nil)
+				r.Header.Set("Authentication", "Bearer JWT")
+				return r
+			}(),
 			listerReturn: []Todo{
 				{ID: "ONE", Title: "Test one", Author: "USER-ONE",
 					CreatedAt: time.Date(2017, time.August, 1, 15, 45, 0, 0, time.UTC)},
@@ -75,7 +79,11 @@ func TestHTTPListHandler(t *testing.T) {
 			expectedResponseBody: `[{"id":"ONE","title":"Test one","author":"USER-ONE","created_at":"2017-08-01T15:45:00Z","due_date":null},{"id":"TWO","title":"Test two","author":"USER-TWO","created_at":"2017-08-01T15:46:00Z","due_date":null}]`,
 		},
 		"error on list retrieving": {
-			req:                httptest.NewRequest("GET", "/", nil),
+			req: func() *http.Request {
+				r := httptest.NewRequest("GET", "/", nil)
+				r.Header.Set("Authentication", "Bearer JWT")
+				return r
+			}(),
 			listerReturn:       nil,
 			listerError:        errors.New("something went wrong :("),
 			expectedStatusCode: 500,
@@ -83,6 +91,14 @@ func TestHTTPListHandler(t *testing.T) {
 				"Content-Type": []string{"application/json; charset=UTF-8"},
 			},
 			expectedResponseBody: `{"msg":"Internal Server Error"}`,
+		},
+		"missing authentication token": {
+			req:                httptest.NewRequest("GET", "/", nil),
+			expectedStatusCode: 400,
+			expectedResponseHeader: http.Header{
+				"Content-Type": []string{"application/json; charset=UTF-8"},
+			},
+			expectedResponseBody: `{"msg":"Missing \"Authentication\" header of format \"Bearer [JWT]\""}`,
 		},
 	}
 
