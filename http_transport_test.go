@@ -1,14 +1,19 @@
 package mosquito
 
 import (
-	"errors"
+	"io"
+	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	jwt "github.com/dgrijalva/jwt-go"
 	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
 )
 
 func TestHTTPRouting(t *testing.T) {
@@ -36,7 +41,10 @@ func TestHTTPRouting(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			srv := NewServer()
+			srv, err := NewServer(validAuthPubKey(t))
+			if err != nil {
+				t.Fatalf("Error on creation of server: %s", err)
+			}
 			if tt.set != nil {
 				i := srv.(*server)
 				tt.set(i)
@@ -105,7 +113,7 @@ func TestHTTPListHandler(t *testing.T) {
 				lister: listerMock,
 			}
 			res := httptest.NewRecorder()
-			h.ServeHTTP(res, tt.req)
+			h.ServeHTTP(0, res, tt.req)
 
 			if res.Code != tt.expectedStatusCode {
 				t.Errorf("Expected status code %d, but got %d", tt.expectedStatusCode, res.Code)
@@ -124,19 +132,37 @@ func TestHTTPListHandler(t *testing.T) {
 	}
 }
 
+func validAuthPubKey(t *testing.T) io.Reader {
+	r, err := os.Open(filepath.Join("testdata", "public.pem"))
+	if err != nil {
+		t.Fatalf("Could not open auth pub key: %s", err)
+	}
+	return r
+}
+
 func TestAuthenticated(t *testing.T) {
+	inOneMinute := time.Now().Add(time.Minute)
+
 	tests := map[string]struct {
+		authPubKey             io.Reader
 		req                    *http.Request
+		expectedUserID         int
 		expectedStatusCode     int
 		expectedResponseHeader http.Header
 		expectedResponseBody   string
 	}{
 		"happy": {
+			authPubKey: validAuthPubKey(t),
 			req: func() *http.Request {
 				r := httptest.NewRequest("GET", "/", nil)
-				r.Header.Set("Authentication", "Bearer JWT")
+				jwt, err := newJWT(filepath.Join("testdata", "private.pem"), inOneMinute, 1337)
+				if err != nil {
+					t.Fatalf("creation of JWT failed: %s", err)
+				}
+				r.Header.Set("Authentication", "Bearer "+jwt)
 				return r
 			}(),
+			expectedUserID:     1337,
 			expectedStatusCode: 413,
 			expectedResponseHeader: http.Header{
 				"Content-Type": []string{"application/json; charset=UTF-8"},
@@ -144,6 +170,7 @@ func TestAuthenticated(t *testing.T) {
 			expectedResponseBody: `"called inner handler"`,
 		},
 		"missing authentication header": {
+			authPubKey:         validAuthPubKey(t),
 			req:                httptest.NewRequest("GET", "/", nil),
 			expectedStatusCode: 400,
 			expectedResponseHeader: http.Header{
@@ -152,6 +179,7 @@ func TestAuthenticated(t *testing.T) {
 			expectedResponseBody: `{"msg":"Missing \"Authentication\" header of format \"Bearer [JWT]\""}`,
 		},
 		"wrongly formatted auth header": {
+			authPubKey: validAuthPubKey(t),
 			req: func() *http.Request {
 				r := httptest.NewRequest("GET", "/", nil)
 				r.Header.Set("Authentication", "JWT")
@@ -167,13 +195,19 @@ func TestAuthenticated(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calledUserID := 0
+			h := userHandler(func(ID int, w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(413)
 				w.Write([]byte(`"called inner handler"`))
+				calledUserID = ID
 			})
 
 			res := httptest.NewRecorder()
-			authenticated(h).ServeHTTP(res, tt.req)
+			ah, err := authenticated(tt.authPubKey, h)
+			if err != nil {
+				t.Fatalf("Error on creating authentication wrapper: %s", err)
+			}
+			ah.ServeHTTP(res, tt.req)
 
 			if res.Code != tt.expectedStatusCode {
 				t.Errorf("Expected status code %d, but got %d", tt.expectedStatusCode, res.Code)
@@ -188,6 +222,25 @@ func TestAuthenticated(t *testing.T) {
 				t.Errorf("Unexpected response body\nexpected: %s\nactual:   %s",
 					tt.expectedResponseBody, res.Body.String())
 			}
+			if calledUserID != tt.expectedUserID {
+				t.Errorf("Expecting user ID %d, but got %d", tt.expectedUserID, calledUserID)
+			}
 		})
 	}
+}
+
+func newJWT(privKeyPath string, exp time.Time, id int) (string, error) {
+	data, err := ioutil.ReadFile(privKeyPath)
+	if err != nil {
+		return "", errors.Wrap(err, "priv key loading failed")
+	}
+	privKey, err := jwt.ParseRSAPrivateKeyFromPEM(data)
+	if err != nil {
+		return "", errors.Wrapf(err, `priv key "%s" parsing failed`, privKeyPath)
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodRS512, jwt.MapClaims{
+		"exp": exp.Unix(),
+		"id":  id,
+	})
+	return token.SignedString(privKey)
 }
