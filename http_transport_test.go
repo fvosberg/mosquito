@@ -92,13 +92,25 @@ func TestHTTPListHandler(t *testing.T) {
 			},
 			expectedResponseBody: `{"msg":"Internal Server Error"}`,
 		},
-		"missing authentication token": {
+		"missing authentication header": {
 			req:                httptest.NewRequest("GET", "/", nil),
 			expectedStatusCode: 400,
 			expectedResponseHeader: http.Header{
 				"Content-Type": []string{"application/json; charset=UTF-8"},
 			},
 			expectedResponseBody: `{"msg":"Missing \"Authentication\" header of format \"Bearer [JWT]\""}`,
+		},
+		"wrongly formatted auth header": {
+			req: func() *http.Request {
+				r := httptest.NewRequest("GET", "/", nil)
+				r.Header.Set("Authentication", "JWT")
+				return r
+			}(),
+			expectedStatusCode: 400,
+			expectedResponseHeader: http.Header{
+				"Content-Type": []string{"application/json; charset=UTF-8"},
+			},
+			expectedResponseBody: `{"msg":"Wrongly formatted \"Authentication\" header. It must be of the format \"Bearer [JWT]\""}`,
 		},
 	}
 
