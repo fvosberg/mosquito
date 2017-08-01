@@ -1,6 +1,7 @@
 package mosquito
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -72,6 +73,16 @@ func TestHTTPListHandler(t *testing.T) {
 				"Content-Type": []string{"application/json; charset=UTF-8"},
 			},
 			expectedResponseBody: `[{"id":"ONE","title":"Test one","author":"USER-ONE","created_at":"2017-08-01T15:45:00Z","due_date":null},{"id":"TWO","title":"Test two","author":"USER-TWO","created_at":"2017-08-01T15:46:00Z","due_date":null}]`,
+		},
+		"error on list retrieving": {
+			req:                httptest.NewRequest("GET", "/", nil),
+			listerReturn:       nil,
+			listerError:        errors.New("something went wrong :("),
+			expectedStatusCode: 500,
+			expectedResponseHeader: http.Header{
+				"Content-Type": []string{"application/json; charset=UTF-8"},
+			},
+			expectedResponseBody: `{"msg":"Internal Server Error"}`,
 		},
 	}
 
