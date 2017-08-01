@@ -1,11 +1,19 @@
 package mosquito
 
-import "net/http"
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+
+	log "github.com/Sirupsen/logrus"
+)
 
 // NewServer creates a new server for the todo service
 // we are returning the interface, not the concrete type, to decouple our implementation from the API
 func NewServer() http.Handler {
-	return &server{}
+	return &server{
+		listHandler: &httpListHandler{},
+	}
 }
 
 type server struct {
@@ -33,4 +41,26 @@ func (s *server) initServeMux() {
 		}
 		s.listHandler.ServeHTTP(w, r)
 	})
+}
+
+type httpListHandler struct {
+	lister lister
+}
+
+func (h *httpListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	todos, err := h.lister.List()
+	if err != nil {
+		w.WriteHeader(500)
+		fmt.Fprint(w, `{"msg":"Internal Server Error"}`)
+		log.Errorf("Retrieving todo list failed: %s", err)
+		return
+	}
+	json.NewEncoder(w).Encode(todos)
+}
+
+//go:generate moq -out lister_moq.go . lister
+
+type lister interface {
+	List() ([]Todo, error)
 }
