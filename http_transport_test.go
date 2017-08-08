@@ -2,7 +2,6 @@ package mosquito
 
 import (
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	jwt "github.com/dgrijalva/jwt-go"
 	"github.com/google/go-cmp/cmp"
 	"github.com/pkg/errors"
 )
@@ -41,7 +39,7 @@ func TestHTTPRouting(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			srv, err := NewServer(validAuthPubKey(t))
+			srv, err := NewServer(&userIDerMock{})
 			if err != nil {
 				t.Fatalf("Error on creation of server: %s", err)
 			}
@@ -113,7 +111,7 @@ func TestHTTPListHandler(t *testing.T) {
 				lister: listerMock,
 			}
 			res := httptest.NewRecorder()
-			h.ServeHTTP(0, res, tt.req)
+			h.ServeHTTP("", res, tt.req)
 
 			if res.Code != tt.expectedStatusCode {
 				t.Errorf("Expected status code %d, but got %d", tt.expectedStatusCode, res.Code)
@@ -141,29 +139,25 @@ func validAuthPubKey(t *testing.T) io.Reader {
 }
 
 func TestAuthenticated(t *testing.T) {
-	inOneMinute := time.Now().Add(time.Minute)
-
 	tests := map[string]struct {
-		authPubKey             io.Reader
-		req                    *http.Request
-		expectedUserID         int
-		expectedStatusCode     int
-		expectedResponseHeader http.Header
-		expectedResponseBody   string
+		authPubKey                 io.Reader
+		req                        *http.Request
+		expectedJWT                string
+		expectedUserIDInSubHandler string
+		expectedStatusCode         int
+		expectedResponseHeader     http.Header
+		expectedResponseBody       string
 	}{
 		"happy": {
 			authPubKey: validAuthPubKey(t),
 			req: func() *http.Request {
 				r := httptest.NewRequest("GET", "/", nil)
-				jwt, err := newJWT(filepath.Join("testdata", "private.pem"), inOneMinute, 1337)
-				if err != nil {
-					t.Fatalf("creation of JWT failed: %s", err)
-				}
-				r.Header.Set("Authentication", "Bearer "+jwt)
+				r.Header.Set("Authentication", "Bearer USERJWT")
 				return r
 			}(),
-			expectedUserID:     1337,
-			expectedStatusCode: 413,
+			expectedJWT:                "USERJWT",
+			expectedUserIDInSubHandler: "1337",
+			expectedStatusCode:         413,
 			expectedResponseHeader: http.Header{
 				"Content-Type": []string{"application/json; charset=UTF-8"},
 			},
@@ -195,15 +189,20 @@ func TestAuthenticated(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			calledUserID := 0
-			h := userHandler(func(ID int, w http.ResponseWriter, r *http.Request) {
+			tokenParser := &userIDerMock{
+				UserIDFunc: func(token string) (string, error) {
+					return tt.expectedUserIDInSubHandler, nil
+				},
+			}
+			userIDInSubHandler := ""
+			h := userHandler(func(ID string, w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(413)
 				w.Write([]byte(`"called inner handler"`))
-				calledUserID = ID
+				userIDInSubHandler = ID
 			})
 
 			res := httptest.NewRecorder()
-			ah, err := authenticated(tt.authPubKey, h)
+			ah, err := authenticated(tokenParser, h)
 			if err != nil {
 				t.Fatalf("Error on creating authentication wrapper: %s", err)
 			}
@@ -222,25 +221,9 @@ func TestAuthenticated(t *testing.T) {
 				t.Errorf("Unexpected response body\nexpected: %s\nactual:   %s",
 					tt.expectedResponseBody, res.Body.String())
 			}
-			if calledUserID != tt.expectedUserID {
-				t.Errorf("Expecting user ID %d, but got %d", tt.expectedUserID, calledUserID)
+			if userIDInSubHandler != tt.expectedUserIDInSubHandler {
+				t.Errorf("Expecting user ID %s, but got %s", tt.expectedUserIDInSubHandler, userIDInSubHandler)
 			}
 		})
 	}
-}
-
-func newJWT(privKeyPath string, exp time.Time, id int) (string, error) {
-	data, err := ioutil.ReadFile(privKeyPath)
-	if err != nil {
-		return "", errors.Wrap(err, "priv key loading failed")
-	}
-	privKey, err := jwt.ParseRSAPrivateKeyFromPEM(data)
-	if err != nil {
-		return "", errors.Wrapf(err, `priv key "%s" parsing failed`, privKeyPath)
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodRS512, jwt.MapClaims{
-		"exp": exp.Unix(),
-		"id":  id,
-	})
-	return token.SignedString(privKey)
 }
